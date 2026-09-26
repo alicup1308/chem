@@ -8,7 +8,7 @@ const HELPER_CONFIG = {
   pdfUrl:       '',
   useBookData:  true,
   model:        'Xenova/multilingual-e5-small',
-  cacheKey:     'chem-emb-cache-v6',
+  cacheKey:     'chem-emb-cache-v7',
   cacheVersion: 7,
   chunkSize:    400,
   chunkOverlap: 80,
@@ -183,14 +183,8 @@ const Helper = {
     } catch { return null; }
   },
 
-  async buildIndex(){
-    const cached = this.loadCache();
-    if (cached && cached.length){
-      this.index = cached;
-      this.loadStatus = 'ready';
-      this.updateStatusUI();
-      return;
-    }
+    async buildIndex(){
+    // ALWAYS load the model first — we need it to embed the query at search time
     try { await this.loadModel(); }
     catch (e){
       console.error('[helper] model load failed:', e);
@@ -199,6 +193,17 @@ const Helper = {
       this.updateStatusUI();
       return;
     }
+
+    // THEN check cache for pre-computed book vectors
+    const cached = this.loadCache();
+    if (cached && cached.length){
+      this.index = cached;
+      this.loadStatus = 'ready';
+      this.updateStatusUI();
+      return;
+    }
+
+    // Otherwise build fresh
     const items = [];
     if (HELPER_CONFIG.useBookData) items.push(...this.collectBookEntries());
 
