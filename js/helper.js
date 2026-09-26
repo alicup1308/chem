@@ -9,12 +9,12 @@ const HELPER_CONFIG = {
   useBookData:  true,
   model:        'Xenova/multilingual-e5-small',
   cacheKey:     'chem-emb-cache-v6',
-  cacheVersion: 6,
+  cacheVersion: 7,
   chunkSize:    400,
   chunkOverlap: 80,
   minChunk:     60,
   topK:         6,
-  minScore:     0.70,
+  minScore:     0.55,
 
   // ---------- Cloudflare Worker (holds the Gemini key server-side) ----------
   // REPLACE THIS with your real Worker URL from dash.cloudflare.com → Workers & Pages
