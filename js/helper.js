@@ -1,4 +1,4 @@
-/* language: JavaScript, file: helper.js, purpose: semantic book helper v6 — RAG with Gemini */
+/* language: JavaScript, file: helper.js, purpose: semantic book helper v7 — Worker proxy */
 
 /* ============================================================
    CONFIG
@@ -13,13 +13,12 @@ const HELPER_CONFIG = {
   chunkSize:    400,
   chunkOverlap: 80,
   minChunk:     60,
-  topK:         6,       // more chunks for the LLM to read
+  topK:         6,
   minScore:     0.70,
 
-  // ---------- Gemini (the "brain" that writes the answer) ----------
-  geminiKey: (window.CHEM_CONFIG && window.CHEM_CONFIG.geminiKey) || '',
-  geminiModel:  'gemini-2.0-flash',
-  geminiUrl:    'https://generativelanguage.googleapis.com/v1beta/models'
+  // ---------- Cloudflare Worker (holds the Gemini key server-side) ----------
+  // REPLACE THIS with your real Worker URL from dash.cloudflare.com → Workers & Pages
+  workerUrl:    'https://chem-proxy.cupali892.workers.dev/'
 };
 
 /* ============================================================
@@ -60,7 +59,7 @@ const Helper = {
   el(id){ return document.getElementById(id); },
 
   /* ---------------- Load model ---------------- */
-   async loadModel(){
+  async loadModel(){
     this.loadStatus = 'model';
     this.loadMessage = 'Loading AI model (~30 MB, first time only)…';
     this.updateStatusUI();
@@ -80,7 +79,6 @@ const Helper = {
       }
     });
 
-    // ---- YIELD after model load ----
     await new Promise(r => setTimeout(r, 50));
   },
 
@@ -142,7 +140,6 @@ const Helper = {
     return items;
   },
 
-    /* ---------------- Embed all items with UI yields ---------------- */
   async embedAll(items){
     const total = items.length;
     const out = [];
@@ -160,7 +157,6 @@ const Helper = {
         this.updateStatusUI();
       }
 
-      // ---- YIELD: let the browser breathe every chunk ----
       await new Promise(r => setTimeout(r, 0));
     }
     return out;
@@ -250,12 +246,11 @@ const Helper = {
   },
 
   /* ============================================================
-     THE BRAIN — ask Gemini to write the answer from context
+     THE BRAIN — ask the Cloudflare Worker (which holds the key)
      ============================================================ */
   async askGemini(question, matches, lang){
     const isAr = lang === 'ar';
 
-    // Build the context from the retrieved chunks
     const context = matches.map((r, i) => {
       const it = r.item;
       if (it.kind === 'section'){
@@ -267,7 +262,6 @@ const Helper = {
       }
     }).join('\n\n---\n\n');
 
-    // Compose the prompt — strict "only answer from the context" instruction
     const system = isAr
       ? `أنت مساعد متخصص في كتاب الكيمياء للصف العاشر في الكويت. أجب عن سؤال الطالب اعتماداً فقط على المصادر المرفقة. لا تخترع أي معلومة من خارج المصادر. إذا لم تجد الإجابة في المصادر قل فقط: "لم أجد هذه المعلومة في الكتاب." اكتب الإجابة بالعربية بشكل مباشر ومختصر وواضح، كأنك تشرح لطالب. لا تذكر "المصدر ١" أو "حسب المصادر" — فقط أجب.`
       : `You are a helper for the Kuwait Grade 10 Chemistry textbook. Answer the student's question using ONLY the provided sources. Never invent information not in the sources. If the answer isn't in the sources, reply exactly: "I couldn't find that in the book." Answer directly, clearly, in a natural teaching tone. Don't mention "Source 1" or "the sources" — just answer.`;
@@ -286,23 +280,26 @@ const Helper = {
       }
     };
 
-    const url = `${HELPER_CONFIG.geminiUrl}/${HELPER_CONFIG.geminiModel}:generateContent?key=${HELPER_CONFIG.geminiKey}`;
+    try {
+      const res = await fetch(HELPER_CONFIG.workerUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
+      if (!res.ok){
+        const err = await res.text();
+        console.error('[helper] Worker error:', res.status, err);
+        return null;
+      }
 
-    if (!res.ok){
-      const err = await res.text();
-      console.error('[helper] Gemini error:', res.status, err);
+      const data = await res.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      return text ? text.trim() : null;
+    } catch (e){
+      console.error('[helper] Worker fetch failed:', e);
       return null;
     }
-
-    const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    return text ? text.trim() : null;
   },
 
   /* ---------------- Render the answer + sources ---------------- */
@@ -310,14 +307,12 @@ const Helper = {
     const isAr = lang === 'ar';
     const safe = (s) => (s || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
 
-    // The main answer — big, prominent
     const answerBlock = answerText
       ? `<div class="answer-main">${safe(answerText).replace(/\n/g, '<br>')}</div>`
       : `<div class="answer-main em">${isAr ? 'لم أستطع توليد إجابة.' : 'Couldn\'t generate an answer.'}</div>`;
 
     if (!matches.length) return answerBlock;
 
-    // Sources below — clickable
     const lessonTitle = (id) => {
       if (typeof BOOK === 'undefined') return '';
       for (const u of BOOK.units) for (const c of u.chapters) for (const l of c.lessons)
@@ -353,9 +348,6 @@ const Helper = {
             <span class="tag tag-pdf">${isAr ? 'من الكتاب' : 'From book'}</span>
             <span class="lname">${isAr ? 'صفحة' : 'Page'} ${it.page}</span>
           </div>
-          <a class="open" href="${HELPER_CONFIG.pdfUrl}#page=${it.page}" target="_blank" rel="noopener">
-            ${isAr ? 'افتح الصفحة ←' : 'Open page →'}
-          </a>
         </div>`;
     }).join('');
 
@@ -398,12 +390,10 @@ const Helper = {
         return;
       }
 
-      // Ask Gemini
       typing.innerHTML = `<div class="em" style="margin-bottom:6px">${isAr ? 'جاري صياغة الإجابة…' : 'Writing the answer…'}</div><div class="dots"><span></span><span></span><span></span></div>`;
       const answer = await this.askGemini(q, matches, isAr ? 'ar' : 'en');
 
       if (!answer){
-        // Fallback: show raw matches if Gemini failed
         typing.innerHTML = `<div class="em">${isAr ? 'تعذّر توليد إجابة — إليك المصادر:' : 'Couldn\'t generate — here are the sources:'}</div>`;
         const sourcesHtml = matches.slice(0,3).map(r => {
           const it = r.item;
