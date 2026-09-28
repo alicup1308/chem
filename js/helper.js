@@ -15,10 +15,7 @@ const HELPER_CONFIG = {
   minChunk:     60,
   topK:         6,
   minScore:     0.50,
-
-  // ---------- Cloudflare Worker (holds the Gemini key server-side) ----------
-  // REPLACE THIS with your real Worker URL from dash.cloudflare.com → Workers & Pages
-workerUrl:    'https://chem-proxy.cupali892.workers.dev'
+  workerUrl:    'https://chem-proxy.cupali892.workers.dev'
 };
 
 /* ============================================================
@@ -184,13 +181,6 @@ const Helper = {
   },
 
   async buildIndex(){
-    const cached = this.loadCache();
-    if (cached && cached.length){
-      this.index = cached;
-      this.loadStatus = 'ready';
-      this.updateStatusUI();
-      return;
-    }
     try { await this.loadModel(); }
     catch (e){
       console.error('[helper] model load failed:', e);
@@ -199,6 +189,15 @@ const Helper = {
       this.updateStatusUI();
       return;
     }
+
+    const cached = this.loadCache();
+    if (cached && cached.length){
+      this.index = cached;
+      this.loadStatus = 'ready';
+      this.updateStatusUI();
+      return;
+    }
+
     const items = [];
     if (HELPER_CONFIG.useBookData) items.push(...this.collectBookEntries());
 
@@ -429,7 +428,12 @@ const Helper = {
     }
   },
 
-  openPanel(){ this.el('helperPanel').classList.remove('hidden'); this.open = true; setTimeout(()=> this.el('helperInput').focus(), 100); },
+  openPanel(){
+    this.el('helperPanel').classList.remove('hidden');
+    this.open = true;
+    setTimeout(()=> this.el('helperInput').focus(), 100);
+    if (this.loadStatus === 'idle') this.buildIndex();
+  },
   closePanel(){ this.el('helperPanel').classList.add('hidden'); this.open = false; },
   toggle(){ this.open ? this.closePanel() : this.openPanel(); },
 
@@ -517,9 +521,8 @@ const Helper = {
     if (text.trim()) this.handleQuery(text);
   },
 
-  async init(){
+  init(){
     this.mount();
-    await this.buildIndex();
     this.updateStatusUI();
     this.updateWelcome();
   }
