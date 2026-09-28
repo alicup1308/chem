@@ -1,20 +1,29 @@
-/* language: JavaScript, file: helper.js — browser model + semantic search + Gemini brain */
+/* language: JavaScript, file: helper.js, purpose: semantic book helper v7 — Worker proxy */
 
+/* ============================================================
+   CONFIG
+   ============================================================ */
 const HELPER_CONFIG = {
   textUrl:      'book-text.txt',
   pdfUrl:       '',
   useBookData:  true,
   model:        'Xenova/multilingual-e5-small',
-  cacheKey:     'chem-emb-cache-v7',
-  cacheVersion: 7,
+  cacheKey:     'chem-emb-cache-v6',
+  cacheVersion: 6,
   chunkSize:    400,
   chunkOverlap: 80,
   minChunk:     60,
   topK:         6,
-  minScore:     0.50,
-  workerUrl:    'https://chem-proxy.cupali892.workers.dev'
+  minScore:     0.70,
+
+  // ---------- Cloudflare Worker (holds the Gemini key server-side) ----------
+  // REPLACE THIS with your real Worker URL from dash.cloudflare.com → Workers & Pages
+  workerUrl:    'https://chem-proxy.your-subdomain.workers.dev'
 };
 
+/* ============================================================
+   Vector helpers
+   ============================================================ */
 function vecToB64(f32){
   const bytes = new Uint8Array(f32.buffer);
   let bin = '';
@@ -36,6 +45,9 @@ function cos(a, b){
   return s;
 }
 
+/* ============================================================
+   Helper
+   ============================================================ */
 const Helper = {
   open: false,
   embedder: null,
@@ -46,6 +58,7 @@ const Helper = {
 
   el(id){ return document.getElementById(id); },
 
+  /* ---------------- Load model ---------------- */
   async loadModel(){
     this.loadStatus = 'model';
     this.loadMessage = 'Loading AI model (~30 MB, first time only)…';
@@ -75,6 +88,7 @@ const Helper = {
     return out.data;
   },
 
+  /* ---------------- Read text ---------------- */
   async loadTextFile(){
     const res = await fetch(HELPER_CONFIG.textUrl);
     if (!res.ok) throw new Error('book-text.txt not found');
@@ -136,11 +150,13 @@ const Helper = {
       } catch (e){
         console.warn('[helper] embed fail', i, e);
       }
+
       if (i % 10 === 0 || i === total - 1){
         this.loadProgress = (i + 1) / total;
         this.loadMessage = `Analyzing book… ${Math.round(this.loadProgress * 100)}%`;
         this.updateStatusUI();
       }
+
       await new Promise(r => setTimeout(r, 0));
     }
     return out;
@@ -168,6 +184,13 @@ const Helper = {
   },
 
   async buildIndex(){
+    const cached = this.loadCache();
+    if (cached && cached.length){
+      this.index = cached;
+      this.loadStatus = 'ready';
+      this.updateStatusUI();
+      return;
+    }
     try { await this.loadModel(); }
     catch (e){
       console.error('[helper] model load failed:', e);
@@ -176,15 +199,6 @@ const Helper = {
       this.updateStatusUI();
       return;
     }
-
-    const cached = this.loadCache();
-    if (cached && cached.length){
-      this.index = cached;
-      this.loadStatus = 'ready';
-      this.updateStatusUI();
-      return;
-    }
-
     const items = [];
     if (HELPER_CONFIG.useBookData) items.push(...this.collectBookEntries());
 
@@ -207,6 +221,7 @@ const Helper = {
     this.updateStatusUI();
   },
 
+  /* ---------------- Search ---------------- */
   async search(query){
     if (!this.embedder) return [];
     const qVec = await this.embed(query, 'query');
@@ -230,6 +245,9 @@ const Helper = {
     return out;
   },
 
+  /* ============================================================
+     THE BRAIN — ask the Cloudflare Worker (which holds the key)
+     ============================================================ */
   async askGemini(question, matches, lang){
     const isAr = lang === 'ar';
 
@@ -245,8 +263,8 @@ const Helper = {
     }).join('\n\n---\n\n');
 
     const system = isAr
-      ? `أنت مساعد متخصص في كتاب الكيمياء للصف العاشر في الكويت. أجب عن سؤال الطالب اعتماداً فقط على المصادر المرفقة. لا تخترع أي معلومة من خارج المصادر. إذا لم تجد الإجابة في المصادر قل فقط: "لم أجد هذه المعلومة في الكتاب." اكتب الإجابة بالعربية بشكل مباشر ومختصر وواضح، كأنك تشرح لطالب. لا تذكر "المصدر ١" — فقط أجب.`
-      : `You are a helper for the Kuwait Grade 10 Chemistry textbook. Answer using ONLY the provided sources. Never invent information. If the answer isn't in the sources, reply exactly: "I couldn't find that in the book." Answer directly and clearly.`;
+      ? `أنت مساعد متخصص في كتاب الكيمياء للصف العاشر في الكويت. أجب عن سؤال الطالب اعتماداً فقط على المصادر المرفقة. لا تخترع أي معلومة من خارج المصادر. إذا لم تجد الإجابة في المصادر قل فقط: "لم أجد هذه المعلومة في الكتاب." اكتب الإجابة بالعربية بشكل مباشر ومختصر وواضح، كأنك تشرح لطالب. لا تذكر "المصدر ١" أو "حسب المصادر" — فقط أجب.`
+      : `You are a helper for the Kuwait Grade 10 Chemistry textbook. Answer the student's question using ONLY the provided sources. Never invent information not in the sources. If the answer isn't in the sources, reply exactly: "I couldn't find that in the book." Answer directly, clearly, in a natural teaching tone. Don't mention "Source 1" or "the sources" — just answer.`;
 
     const userMsg = isAr
       ? `المصادر:\n\n${context}\n\nالسؤال: ${question}\n\nالإجابة:`
@@ -255,7 +273,11 @@ const Helper = {
     const body = {
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: userMsg }] }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 800, topP: 0.9 }
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 800,
+        topP: 0.9
+      }
     };
 
     try {
@@ -271,35 +293,16 @@ const Helper = {
         return null;
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let full = '';
-
-      while (true){
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-        for (const line of lines){
-          if (!line.startsWith('data: ')) continue;
-          const chunk = line.slice(6).trim();
-          if (chunk === '[DONE]') continue;
-          try {
-            const parsed = JSON.parse(chunk);
-            const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (text) full += text;
-          } catch {}
-        }
-      }
-      return full || null;
+      const data = await res.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      return text ? text.trim() : null;
     } catch (e){
       console.error('[helper] Worker fetch failed:', e);
       return null;
     }
   },
 
+  /* ---------------- Render the answer + sources ---------------- */
   renderAnswer(answerText, matches, lang){
     const isAr = lang === 'ar';
     const safe = (s) => (s || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
@@ -320,18 +323,39 @@ const Helper = {
     const sourceCards = matches.slice(0, 4).map(r => {
       const it = r.item;
       if (it.kind === 'section'){
-        return `<div class="result" data-lesson="${it.lessonId}"><div class="top"><span class="tag">${isAr ? 'شرح' : 'Section'}</span><span class="lname">${lessonTitle(it.lessonId)}</span></div><div class="excerpt"><strong>${safe(it.sectionHead)}</strong></div></div>`;
+        return `
+          <div class="result" data-lesson="${it.lessonId}">
+            <div class="top">
+              <span class="tag">${isAr ? 'شرح' : 'Section'}</span>
+              <span class="lname">${lessonTitle(it.lessonId)}</span>
+            </div>
+            <div class="excerpt"><strong>${safe(it.sectionHead)}</strong></div>
+          </div>`;
       }
       if (it.kind === 'qa'){
-        return `<div class="result" data-lesson="${it.lessonId}"><div class="top"><span class="tag">${isAr ? 'سؤال' : 'Q&A'}</span><span class="lname">${lessonTitle(it.lessonId)}</span></div><div class="excerpt">${safe(it.q)}</div></div>`;
+        return `
+          <div class="result" data-lesson="${it.lessonId}">
+            <div class="top">
+              <span class="tag">${isAr ? 'سؤال' : 'Q&A'}</span>
+              <span class="lname">${lessonTitle(it.lessonId)}</span>
+            </div>
+            <div class="excerpt">${safe(it.q)}</div>
+          </div>`;
       }
-      return `<div class="result result-pdf"><div class="top"><span class="tag tag-pdf">${isAr ? 'من الكتاب' : 'From book'}</span><span class="lname">${isAr ? 'صفحة' : 'Page'} ${it.page}</span></div></div>`;
+      return `
+        <div class="result result-pdf">
+          <div class="top">
+            <span class="tag tag-pdf">${isAr ? 'من الكتاب' : 'From book'}</span>
+            <span class="lname">${isAr ? 'صفحة' : 'Page'} ${it.page}</span>
+          </div>
+        </div>`;
     }).join('');
 
     const sourcesLabel = isAr ? 'المصادر:' : 'Sources:';
     return `${answerBlock}<div class="sources-label">${sourcesLabel}</div>${sourceCards}`;
   },
 
+  /* ---------------- Chat UI ---------------- */
   pushMsg(role, html){
     const body = this.el('helperBody');
     const div = document.createElement('div');
@@ -360,7 +384,9 @@ const Helper = {
     try {
       const matches = await this.search(q);
       if (!matches.length){
-        typing.innerHTML = isAr ? 'لم أجد هذه المعلومة في الكتاب.' : 'I couldn\'t find that in the book.';
+        typing.innerHTML = isAr
+          ? 'لم أجد هذه المعلومة في الكتاب.'
+          : 'I couldn\'t find that in the book.';
         return;
       }
 
@@ -403,12 +429,7 @@ const Helper = {
     }
   },
 
-  openPanel(){
-    this.el('helperPanel').classList.remove('hidden');
-    this.open = true;
-    setTimeout(()=> this.el('helperInput').focus(), 100);
-    if (this.loadStatus === 'idle') this.buildIndex();
-  },
+  openPanel(){ this.el('helperPanel').classList.remove('hidden'); this.open = true; setTimeout(()=> this.el('helperInput').focus(), 100); },
   closePanel(){ this.el('helperPanel').classList.add('hidden'); this.open = false; },
   toggle(){ this.open ? this.closePanel() : this.openPanel(); },
 
@@ -432,7 +453,7 @@ const Helper = {
   updateWelcome(){
     const isAr = ChemI18N.lang === 'ar';
     const suggestions = isAr
-      ? ['ما هي الكيمياء؟', 'ما هي استخدامات الكيمياء العضوية؟', 'ما هي قاعدة هوند؟', 'قواعد الأمن والسلامة']
+      ? ['ما هي الكيمياء؟', 'ما هي استخدامات الكيمياء العضوية؟', 'ما هي قاعدة هوند؟', 'قواعد الأمن والسلامة في المختبر']
       : ['What is chemistry?', 'What are the uses of organic chemistry?', "What is Hund's rule?", 'Lab safety rules'];
     const body = this.el('helperBody');
     body.innerHTML = '';
@@ -446,6 +467,8 @@ const Helper = {
     w.appendChild(wrap);
     wrap.querySelectorAll('.chip-suggest').forEach(c=>{
       c.style.cssText = 'padding:5px 10px;border-radius:16px;background:var(--card);border:1px solid var(--line);font-size:.76rem;font-weight:600;color:var(--muted);cursor:pointer;transition:all .15s';
+      c.addEventListener('mouseenter', ()=>{ c.style.borderColor='var(--accent)'; c.style.color='var(--txt)'; });
+      c.addEventListener('mouseleave', ()=>{ c.style.borderColor='var(--line)'; c.style.color='var(--muted)'; });
       c.addEventListener('click', ()=> this.handleQuery(c.dataset.q));
     });
   },
@@ -458,7 +481,7 @@ const Helper = {
         <div class="helper-head">
           <div class="av">Ac</div>
           <div class="info">
-            <div class="nm">Atrax Book Helper</div>
+            <div class="nm" id="helperTitle">Atrax Book Helper</div>
             <div class="st" id="helperStatus">Preparing…</div>
           </div>
           <button class="x" id="helperClose">✕</button>
@@ -494,8 +517,9 @@ const Helper = {
     if (text.trim()) this.handleQuery(text);
   },
 
-  init(){
+  async init(){
     this.mount();
+    await this.buildIndex();
     this.updateStatusUI();
     this.updateWelcome();
   }
