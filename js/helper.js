@@ -18,7 +18,7 @@ const HELPER_CONFIG = {
 
   // ---------- Cloudflare Worker (holds the Gemini key server-side) ----------
   // REPLACE THIS with your real Worker URL from dash.cloudflare.com → Workers & Pages
-  workerUrl:    'https://chem-proxy.your-subdomain.workers.dev'
+    workerUrl:    'https://chem-proxy.cupali892.workers.dev''
 };
 
 /* ============================================================
