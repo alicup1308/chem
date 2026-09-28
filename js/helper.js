@@ -14,11 +14,11 @@ const HELPER_CONFIG = {
   chunkOverlap: 80,
   minChunk:     60,
   topK:         6,
-  minScore:     0.70,
+  minScore:     0.50,
 
   // ---------- Cloudflare Worker (holds the Gemini key server-side) ----------
   // REPLACE THIS with your real Worker URL from dash.cloudflare.com → Workers & Pages
-    workerUrl:    'https://chem-proxy.cupali892.workers.dev''
+workerUrl:    'https://chem-proxy.cupali892.workers.dev'
 };
 
 /* ============================================================
