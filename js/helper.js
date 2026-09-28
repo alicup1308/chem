@@ -1,4 +1,4 @@
-/* language: JavaScript, file: helper.js, purpose: semantic book helper v7 — Worker proxy */
+/* language: JavaScript, file: helper.js — browser model + semantic search + Gemini brain */
 
 const HELPER_CONFIG = {
   textUrl:      'book-text.txt',
@@ -15,7 +15,6 @@ const HELPER_CONFIG = {
   workerUrl:    'https://chem-proxy.cupali892.workers.dev'
 };
 
-/* ---------- vector helpers ---------- */
 function vecToB64(f32){
   const bytes = new Uint8Array(f32.buffer);
   let bin = '';
@@ -169,7 +168,6 @@ const Helper = {
   },
 
   async buildIndex(){
-    // Always load the model first — needed to embed the query
     try { await this.loadModel(); }
     catch (e){
       console.error('[helper] model load failed:', e);
@@ -179,7 +177,6 @@ const Helper = {
       return;
     }
 
-    // Then check cache
     const cached = this.loadCache();
     if (cached && cached.length){
       this.index = cached;
@@ -248,8 +245,8 @@ const Helper = {
     }).join('\n\n---\n\n');
 
     const system = isAr
-      ? `أنت مساعد متخصص في كتاب الكيمياء للصف العاشر في الكويت. أجب عن سؤال الطالب اعتماداً فقط على المصادر المرفقة. لا تخترع أي معلومة من خارج المصادر. إذا لم تجد الإجابة في المصادر قل فقط: "لم أجد هذه المعلومة في الكتاب." اكتب الإجابة بالعربية بشكل مباشر ومختصر وواضح.`
-      : `You are a helper for the Kuwait Grade 10 Chemistry textbook. Answer using ONLY the provided sources. Never invent information. If the answer isn't in the sources, reply exactly: "I couldn't find that in the book."`;
+      ? `أنت مساعد متخصص في كتاب الكيمياء للصف العاشر في الكويت. أجب عن سؤال الطالب اعتماداً فقط على المصادر المرفقة. لا تخترع أي معلومة من خارج المصادر. إذا لم تجد الإجابة في المصادر قل فقط: "لم أجد هذه المعلومة في الكتاب." اكتب الإجابة بالعربية بشكل مباشر ومختصر وواضح، كأنك تشرح لطالب. لا تذكر "المصدر ١" — فقط أجب.`
+      : `You are a helper for the Kuwait Grade 10 Chemistry textbook. Answer using ONLY the provided sources. Never invent information. If the answer isn't in the sources, reply exactly: "I couldn't find that in the book." Answer directly and clearly.`;
 
     const userMsg = isAr
       ? `المصادر:\n\n${context}\n\nالسؤال: ${question}\n\nالإجابة:`
